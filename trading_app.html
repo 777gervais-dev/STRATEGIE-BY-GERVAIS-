@@ -678,6 +678,7 @@ window.onload = async () => {
   generateData();
   renderPrice(); renderMTF(); renderML(); renderICT(); renderTrend(); renderTrendDuration(); renderLevels();
   initChart();
+  loadTrendDuration();
   log(`Asset actif: ${currentAsset}`, 'entry');
   // Timer live pour durée de tendance
   if (durationTimerInterval) clearInterval(durationTimerInterval);
@@ -880,6 +881,39 @@ const ANALYSIS_CACHE = {
 // ============================================================
 //  DÉTECTION TENDANCE 15MIN–1H — état par asset
 // ============================================================
+// ── localStorage persistence pour le compteur ──────────────
+const LS_KEY = 'mlict_trend_duration_v2';
+
+function saveTrendDuration() {
+  try {
+    localStorage.setItem(LS_KEY, JSON.stringify(TREND_DURATION));
+  } catch(e) {}
+}
+
+function loadTrendDuration() {
+  try {
+    const saved = localStorage.getItem(LS_KEY);
+    if (saved) {
+      const data = JSON.parse(saved);
+      // Restaurer chaque asset
+      ['XAUUSD','BTCUSD','USOIL'].forEach(a => {
+        if (data[a]) {
+          TREND_DURATION[a].startTime   = data[a].startTime   || null;
+          TREND_DURATION[a].dir         = data[a].dir         || null;
+          TREND_DURATION[a].peakScore   = data[a].peakScore   || 50;
+          TREND_DURATION[a].weakenCount = data[a].weakenCount || 0;
+        }
+      });
+      log('Compteur tendance restauré depuis localStorage ✓', 'ok');
+    }
+  } catch(e) {}
+}
+
+function resetTrendDuration(asset) {
+  TREND_DURATION[asset] = { startTime: null, dir: null, peakScore: 50, weakenCount: 0 };
+  saveTrendDuration();
+}
+
 const TREND_DURATION = {
   XAUUSD: { startTime: null, dir: null, peakScore: 50, weakenCount: 0 },
   BTCUSD: { startTime: null, dir: null, peakScore: 50, weakenCount: 0 },
@@ -912,6 +946,8 @@ function updateTrendDuration(trendDir, bullScore, confirmed) {
   } else if (strength >= peakStrength * 0.6) {
     td.weakenCount = Math.max(0, td.weakenCount - 1);
   }
+  // ── Sauvegarder dans localStorage après chaque mise à jour ──
+  saveTrendDuration();
 }
 
 function renderTrendDuration() {
