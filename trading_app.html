@@ -661,8 +661,8 @@ const LIVE = {
              vol: 'Élevé', spread: 0.30, dailyRange: 40, source: 'Cache' },
   BTCUSD: { price: 83990,   open: 83000, high: 85200, low: 82100, change24: 0, changePct: 0,
              vol: 'Très Élevé', spread: 10, dailyRange: 2000, source: 'Cache' },
-  USOIL:  { price: 103.61, open: 98.00, high: 119.48, low: 96.25, change24: 0, changePct: 0,
-             vol: 'Élevé', spread: 0.05, dailyRange: 1.50, source: 'Cache' }
+  USOIL:  { price: 103.61, open: 98.00, high: 119.48, low: 96.25, change24: 13.71, changePct: 13.98,
+             vol: 'Élevé', spread: 0.05, dailyRange: 23.23, source: 'Cache' }
 };
 
 // ============================================================
@@ -809,71 +809,78 @@ async function fetchGold() {
 
 // USOIL — Crude Oil WTI via public APIs
 async function fetchCrude() {
-  // Sources multiples pour le WTI Crude Oil
+  // Sources WTI Crude Oil — Yahoo Finance CL=F en priorité
   const CRUDE_SOURCES = [
-    // Source 1 — CoinGecko (WTI Oil token)
+    // Source 1 — Yahoo Finance CL=F (Crude Oil Futures)
     async () => {
-      const r = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=crude-oil&vs_currencies=usd&include_24hr_change=true', {signal: AbortSignal.timeout(7000)});
-      if(!r.ok) throw new Error('CoinGecko oil '+r.status);
+      const r = await fetch(
+        'https://query1.finance.yahoo.com/v8/finance/chart/CL=F?interval=1m&range=1d',
+        { signal: AbortSignal.timeout(8000),
+          headers: { 'User-Agent': 'Mozilla/5.0' } }
+      );
+      if(!r.ok) throw new Error('Yahoo CL=F '+r.status);
       const d = await r.json();
-      const price = d?.['crude-oil']?.usd;
-      const chgPct = d?.['crude-oil']?.usd_24h_change || 0;
-      if(!price || isNaN(price)) throw new Error('CoinGecko: pas de prix');
-      return { price, chgPct, source: 'CoinGecko ✓' };
+      const meta  = d?.chart?.result?.[0]?.meta;
+      const price = meta?.regularMarketPrice || meta?.previousClose;
+      const open  = meta?.chartPreviousClose || meta?.regularMarketOpen || price;
+      const high  = meta?.regularMarketDayHigh || price;
+      const low   = meta?.regularMarketDayLow  || price;
+      const chgPct= meta?.regularMarketChangePercent || 0;
+      if(!price || isNaN(price) || price < 20) throw new Error('Yahoo: prix invalide');
+      return { price, open, high, low, chgPct, source: 'Yahoo Finance ✓' };
     },
-    // Source 2 — metals.live
+    // Source 2 — Yahoo Finance via query2
+    async () => {
+      const r = await fetch(
+        'https://query2.finance.yahoo.com/v8/finance/chart/CL=F?interval=5m&range=1d',
+        { signal: AbortSignal.timeout(8000),
+          headers: { 'User-Agent': 'Mozilla/5.0' } }
+      );
+      if(!r.ok) throw new Error('Yahoo2 CL=F '+r.status);
+      const d = await r.json();
+      const meta  = d?.chart?.result?.[0]?.meta;
+      const price = meta?.regularMarketPrice || meta?.previousClose;
+      const chgPct= meta?.regularMarketChangePercent || 0;
+      const open  = meta?.regularMarketOpen || price;
+      const high  = meta?.regularMarketDayHigh || price;
+      const low   = meta?.regularMarketDayLow  || price;
+      if(!price || isNaN(price) || price < 20) throw new Error('Yahoo2: prix invalide');
+      return { price, open, high, low, chgPct, source: 'Yahoo Finance 2 ✓' };
+    },
+    // Source 3 — metals.live fallback
     async () => {
       const r = await fetch('https://api.metals.live/v1/spot/oil', {signal: AbortSignal.timeout(6000)});
       if(!r.ok) throw new Error('metals.live '+r.status);
       const d = await r.json();
       const price = Array.isArray(d) ? parseFloat(d[0]?.oil || d[0]?.price) : parseFloat(d.oil || d.price || d.wti);
-      if(!price || isNaN(price)) throw new Error('metals.live: prix invalide');
-      return { price, chgPct: 0, source: 'metals.live ✓' };
+      if(!price || isNaN(price) || price < 20) throw new Error('metals.live: invalide');
+      return { price, open: price, high: price, low: price, chgPct: 0, source: 'metals.live ✓' };
     },
-    // Source 3 — Exchange rates (OIL/USD)
-    async () => {
-      const r = await fetch('https://api.exchangerate.host/latest?base=OIL&symbols=USD', {signal: AbortSignal.timeout(7000)});
-      if(!r.ok) throw new Error('exchangerate '+r.status);
-      const d = await r.json();
-      const price = d?.rates?.USD;
-      if(!price || isNaN(price)) throw new Error('exchangerate: pas de prix');
-      return { price, chgPct: 0, source: 'exchangerate ✓' };
-    },
-    // Source 4 — Investing.com public endpoint
-    async () => {
-      const r = await fetch('https://api.investing.com/api/financials/historical/1/usoil/D1', {signal: AbortSignal.timeout(7000)});
-      if(!r.ok) throw new Error('investing '+r.status);
-      const d = await r.json();
-      const price = d?.data?.[0]?.last_close;
-      if(!price) throw new Error('investing: pas de prix');
-      return { price: parseFloat(price), chgPct: 0, source: 'Investing ✓' };
-    }
   ];
 
   for(let i = 0; i < CRUDE_SOURCES.length; i++) {
     try {
-      const { price, chgPct, source } = await CRUDE_SOURCES[i]();
-      if(price > 20 && price < 200) {
+      const { price, open, high, low, chgPct, source } = await CRUDE_SOURCES[i]();
+      if(price > 20 && price < 300) {
         const change24 = price * chgPct / 100;
-        const changePct = chgPct;
         LIVE.USOIL = {
-          price,
-          open : LIVE.USOIL.open || price - change24,
-          high : Math.max(LIVE.USOIL.high || price, price),
-          low  : Math.min(LIVE.USOIL.low  || price, price),
-          change24, changePct,
-          vol  : 'Élevé', spread: 0.05,
-          dailyRange: LIVE.USOIL.dailyRange || 1.5,
+          price, open, change24,
+          changePct : chgPct,
+          high      : Math.max(high, price),
+          low       : Math.min(low,  price),
+          vol       : 'Élevé',
+          spread    : 0.05,
+          dailyRange: (high - low) || 1.5,
           source
         };
-        log(`CRUDE: $${price.toFixed(2)}/bbl [${source}] ${changePct>=0?'+':''}${changePct.toFixed(2)}%`, 'ok');
+        log(`CRUDE: $${price.toFixed(2)}/bbl [${source}] ${chgPct>=0?'+':''}${chgPct.toFixed(2)}%`, 'ok');
         return;
       }
     } catch(e) {
       log(`Crude source ${i+1} KO: ${e.message}`, 'warn');
     }
   }
-  log('CRUDE: toutes les APIs KO — cache utilisé', 'warn');
+  log('CRUDE: toutes les APIs KO — cache $103.61 utilisé', 'warn');
   LIVE.USOIL.source = 'Cache ⚠';
 }
 
